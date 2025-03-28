@@ -10,7 +10,7 @@ from flask import Flask, Response
 from picamera2 import Picamera2
 
 # ============================================================================
-# CameraServer Class (Unchanged)
+# CameraServer Class
 # ============================================================================
 class CameraServer:
     def __init__(self):
@@ -75,7 +75,7 @@ class CameraServer:
             print("Camera Webserver is not running.")
 
 # ============================================================================
-# PCA9685, TRSensor, ServoController Classes (Unchanged)
+# PCA9685, TRSensor, ServoController Classes
 # ============================================================================
 class PCA9685:
     __SUBADR1   = 0x02
@@ -254,7 +254,7 @@ class ServoController:
         print("Servos stopped and PWM signals disabled")
 
 # ============================================================================
-# AlphaBot Class with Integrated Digit Recognition
+# AlphaBot Class
 # ============================================================================
 class AlphaBot(object):
     def __init__(self, ain1=12, ain2=13, ena=6, bin1=20, bin2=21, enb=26, dr=16, dl=19):
@@ -392,6 +392,7 @@ class AlphaBot(object):
         try:
             while self.line_following:
                 position, sensors = self.tr_sensor.readLine()
+                # If all sensors read very high values, consider it an endpoint and stop
                 if all(sensor > 900 for sensor in sensors):
                     self.setPWMA(0)
                     self.setPWMB(0)
@@ -435,7 +436,7 @@ class AlphaBot(object):
         self.camera_server.stop_server()
 
     # -------------------------------------------------------------------------
-    # New method: Recognize Digit using the shared Picamera2 instance
+    # Recognize Digit using the shared Picamera2 instance
     # -------------------------------------------------------------------------
     def recognize_digit(self):
         if self.clf is None:
@@ -475,35 +476,51 @@ class AlphaBot(object):
         return prediction[0]
 
 # ============================================================================
-# Main Section for Testing
+# Main Section: Continuous Loop with Line Following and Digit Recognition
 # ============================================================================
 if __name__ == '__main__':
     bot = AlphaBot()
+    # Start the camera server so that streaming is available
+    bot.start_camera()
+    print("Camera server started. Visit http://<your_pi_ip>:5000/ in your browser.")
+    time.sleep(2)  # Allow time for the camera to initialize
+
+    # Function to run line following in a separate thread
+    def run_line_follow():
+        bot.start_line_follow()
+
+    # Start the initial line-following thread
+    line_thread = threading.Thread(target=run_line_follow)
+    line_thread.start()
+
     try:
-        # Example motor control
-        bot.forward()
-        time.sleep(2)
-        bot.stop()
-
-        # Start the camera server (which starts the camera)
-        bot.start_camera()
-        print("Camera server started. Visit http://<your_pi_ip>:5000/ in your browser.")
-        time.sleep(5)  # Give the camera a moment to warm up
-
-        # Perform digit recognition using the same camera instance
-        digit = bot.recognize_digit()
-        if digit is not None:
-            print("Digit recognized as:", digit)
-        else:
-            print("No digit recognized.")
-
-        time.sleep(5)  # Keep the camera running briefly
-
-        # Stop the camera server
-        bot.stop_camera()
-        print("Camera server stopped.")
-
+        while True:
+            # Continuously check for an obstacle using infrared sensors
+            if bot.infrared_obstacle_check():
+                print("Obstacle detected! Stopping line following.")
+                # Stop line following
+                bot.stop_line_follow()
+                bot.stop()
+                # Give a moment for the robot to fully stop
+                time.sleep(1)
+                # Perform digit recognition using the camera
+                print("Recognizing digit...")
+                digit = bot.recognize_digit()
+                if digit is not None:
+                    print("Recognized digit:", digit)
+                else:
+                    print("No digit recognized.")
+                # Pause briefly before resuming line following
+                time.sleep(1)
+                print("Resuming line following.")
+                # Restart line following in a new thread
+                line_thread = threading.Thread(target=run_line_follow)
+                line_thread.start()
+            # Check the sensors frequently
+            time.sleep(0.1)
     except KeyboardInterrupt:
-        bot.stop()
+        print("Exiting program.")
+    finally:
+        bot.stop_line_follow()
         bot.stop_camera()
         GPIO.cleanup()
