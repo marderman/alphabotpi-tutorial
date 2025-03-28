@@ -2,31 +2,31 @@ import threading
 import time
 import math
 import cv2
+import numpy as np
+import pickle
 import RPi.GPIO as GPIO
 import smbus
 from flask import Flask, Response
 from picamera2 import Picamera2
 
 # ============================================================================
-# CameraServer Class
+# CameraServer Class (Unchanged)
 # ============================================================================
 class CameraServer:
     def __init__(self):
-        # Initialize the CameraServer and Flask app
         self.app = Flask(__name__)
         self.picam2 = Picamera2()
-        self.picam2.preview_configuration.main.size = (640, 480)  # Set resolution
-        self.picam2.preview_configuration.main.format = "RGB888"   # Set pixel format
+        # Configure for preview (streaming)
+        self.picam2.preview_configuration.main.size = (640, 480)
+        self.picam2.preview_configuration.main.format = "RGB888"
         self.picam2.configure("preview")
         self.server_thread = None
         self.running = False
 
-        # Define Flask routes
         self.app.add_url_rule('/video_feed', 'video_feed', self.video_feed)
         self.app.add_url_rule('/', 'index', self.index)
 
     def generate_frames(self):
-        # Capture frames from the camera and yield them as JPEG-encoded bytes
         while self.running:
             frame = self.picam2.capture_array()
             ret, buffer = cv2.imencode('.jpg', frame)
@@ -37,12 +37,10 @@ class CameraServer:
                    b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
 
     def video_feed(self):
-        # Video streaming route. Put this in the src attribute of an img tag
         return Response(self.generate_frames(),
                         mimetype='multipart/x-mixed-replace; boundary=frame')
 
     def index(self):
-        # Home page displaying the video feed
         return '''
         <html>
           <head>
@@ -56,12 +54,10 @@ class CameraServer:
         '''
 
     def run_server(self):
-        # Start Flask webserver (this runs in a separate thread)
         self.running = True
         self.app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
 
     def start_server(self):
-        # Start the Flask webserver in a separate thread
         if self.server_thread is None or not self.server_thread.is_alive():
             print("Starting Camera Webserver...")
             self.picam2.start()
@@ -71,7 +67,6 @@ class CameraServer:
             print("Camera Webserver is already running.")
 
     def stop_server(self):
-        # Stop the camera and terminate the server
         if self.running:
             print("Stopping Camera Webserver...")
             self.running = False
@@ -80,7 +75,7 @@ class CameraServer:
             print("Camera Webserver is not running.")
 
 # ============================================================================
-# PCA9685 16-Channel PWM Servo Driver Class
+# PCA9685, TRSensor, ServoController Classes (Unchanged)
 # ============================================================================
 class PCA9685:
     __SUBADR1   = 0x02
@@ -117,19 +112,17 @@ class PCA9685:
         return result
 	
     def setPWMFreq(self, freq):
-        prescaleval = 25000000.0    # 25MHz
-        prescaleval /= 4096.0       # 12-bit
+        prescaleval = 25000000.0
+        prescaleval /= 4096.0
         prescaleval /= float(freq)
         prescaleval -= 1.0
         if self.debug:
             print("Setting PWM frequency to %d Hz" % freq)
             print("Estimated pre-scale: %d" % prescaleval)
         prescale = math.floor(prescaleval + 0.5)
-        if self.debug:
-            print("Final pre-scale: %d" % prescale)
         oldmode = self.read(self.__MODE1)
-        newmode = (oldmode & 0x7F) | 0x10        # sleep
-        self.write(self.__MODE1, newmode)        # go to sleep
+        newmode = (oldmode & 0x7F) | 0x10
+        self.write(self.__MODE1, newmode)
         self.write(self.__PRESCALE, int(math.floor(prescale)))
         self.write(self.__MODE1, oldmode)
         time.sleep(0.005)
@@ -140,24 +133,17 @@ class PCA9685:
         self.write(self.__LED0_ON_H+4*channel, on >> 8)
         self.write(self.__LED0_OFF_L+4*channel, off & 0xFF)
         self.write(self.__LED0_OFF_H+4*channel, off >> 8)
-        if self.debug:
-            print("channel: %d  LED_ON: %d LED_OFF: %d" % (channel, on, off))
 	  
     def setServoPulse(self, channel, pulse):
-        pulse = int(pulse*4096/20000)      # PWM frequency is 50Hz; period is 20000us
+        pulse = int(pulse*4096/20000)
         self.setPWM(channel, 0, pulse)
 
-# ============================================================================
-# TRSensor Class (Line Sensor)
-# ============================================================================
 class TRSensor:
     def __init__(self, numSensors=5):
         self.numSensors = numSensors
         self.calibratedMin = [0] * self.numSensors
         self.calibratedMax = [1023] * self.numSensors
         self.last_value = 0
-        # Assume GPIO.setmode has been called by AlphaBot; only setup needed pins here.
-        # Pin assignments for TRSensor hardware:
         self.CS = 5
         self.Clock = 25
         self.Address = 24
@@ -227,13 +213,10 @@ class TRSensor:
                 self.last_value = (self.numSensors - 1) * 1000
         return self.last_value, sensor_values
 
-# ============================================================================
-# ServoController Class
-# ============================================================================
 class ServoController:
     def __init__(self):
         self.pwm = PCA9685(0x40)
-        self.pwm.setPWMFreq(50)  # Set PWM frequency to 50Hz
+        self.pwm.setPWMFreq(50)
 
     def move_left(self):
         print("Moving servo left")
@@ -271,7 +254,7 @@ class ServoController:
         print("Servos stopped and PWM signals disabled")
 
 # ============================================================================
-# AlphaBot Class
+# AlphaBot Class with Integrated Digit Recognition
 # ============================================================================
 class AlphaBot(object):
     def __init__(self, ain1=12, ain2=13, ena=6, bin1=20, bin2=21, enb=26, dr=16, dl=19):
@@ -291,38 +274,36 @@ class AlphaBot(object):
         self.Button = 7
         self.Buzzer = 4
 
-        # Initialize GPIO only once in AlphaBot
         GPIO.setmode(GPIO.BCM)
         GPIO.setwarnings(False)
 
-        # Setup pins for motor control and additional components
         motor_pins = [self.AIN1, self.AIN2, self.BIN1, self.BIN2, self.ENA, self.ENB]
         for pin in motor_pins:
             GPIO.setup(pin, GPIO.OUT)
 
-        # Buzzer
         GPIO.setup(self.Buzzer, GPIO.OUT)
-        
-        # Button
         GPIO.setup(self.Button, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-
-        # Infrared sensors
         GPIO.setup(self.DR, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         GPIO.setup(self.DL, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-        # Initialize PWM for motor control
         self.PWMA = GPIO.PWM(self.ENA, 500)
         self.PWMB = GPIO.PWM(self.ENB, 500)
         self.PWMA.start(self.PA)
         self.PWMB.start(self.PB)
-
-        # Stop the motors initially
         self.stop()
 
-        # Initialize TRSensor, ServoController, and the integrated CameraServer
+        # Initialize additional components
         self.tr_sensor = TRSensor()
         self.servo = ServoController()
         self.camera_server = CameraServer()
+        # Load the trained digit classifier once and store as an attribute
+        try:
+            with open("digit_classifier.pkl", "rb") as f:
+                self.clf = pickle.load(f)
+            print("Digit classifier loaded successfully.")
+        except Exception as e:
+            print("Error loading classifier:", e)
+            self.clf = None
 
     # Motor control methods...
     def forward(self):
@@ -407,7 +388,7 @@ class AlphaBot(object):
 
     def start_line_follow(self):
         print("Starting line following...")
-        self.line_following = True  # Set flag to True to start
+        self.line_following = True
         try:
             while self.line_following:
                 position, sensors = self.tr_sensor.readLine()
@@ -448,12 +429,50 @@ class AlphaBot(object):
         GPIO.output(self.Buzzer, GPIO.LOW)
 
     def start_camera(self):
-        #Start the camera webserver
         self.camera_server.start_server()
 
     def stop_camera(self):
-        #Stop the camera webserver
         self.camera_server.stop_server()
+
+    # -------------------------------------------------------------------------
+    # New method: Recognize Digit using the shared Picamera2 instance
+    # -------------------------------------------------------------------------
+    def recognize_digit(self):
+        if self.clf is None:
+            print("Classifier not loaded. Cannot recognize digit.")
+            return None
+        # Capture an image from the already initialized camera
+        frame = self.camera_server.picam2.capture_array()
+        # Convert image to grayscale
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # Apply Gaussian blur to reduce noise
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        # Adaptive thresholding for robust binarization
+        thresh = cv2.adaptiveThreshold(
+            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV, 11, 2)
+        # Morphological closing to remove small holes and connect digit parts
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        morph = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+        # Find contours in the processed image
+        contours, _ = cv2.findContours(morph.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if len(contours) == 0:
+            print("No digit found in the image.")
+            return None
+        # Assume the largest contour corresponds to the digit
+        c = max(contours, key=cv2.contourArea)
+        x, y, w, h = cv2.boundingRect(c)
+        roi = morph[y:y+h, x:x+w]
+        # Add a border to the ROI if necessary
+        roi = cv2.copyMakeBorder(roi, 5, 5, 5, 5, cv2.BORDER_CONSTANT, value=[0, 0, 0])
+        # Resize ROI to 8x8 pixels to match the classifier’s expected input
+        roi_resized = cv2.resize(roi, (8, 8), interpolation=cv2.INTER_AREA)
+        # Normalize pixel values to match the training scale (0-16)
+        roi_resized = (roi_resized.astype(np.float32) / 255.0) * 16
+        roi_flatten = roi_resized.flatten().reshape(1, -1)
+        prediction = self.clf.predict(roi_flatten)
+        print("Predicted digit:", prediction[0])
+        return prediction[0]
 
 # ============================================================================
 # Main Section for Testing
@@ -466,10 +485,19 @@ if __name__ == '__main__':
         time.sleep(2)
         bot.stop()
 
-        # Start the camera server
+        # Start the camera server (which starts the camera)
         bot.start_camera()
         print("Camera server started. Visit http://<your_pi_ip>:5000/ in your browser.")
-        time.sleep(60)  # Keep the camera running for 60 seconds
+        time.sleep(5)  # Give the camera a moment to warm up
+
+        # Perform digit recognition using the same camera instance
+        digit = bot.recognize_digit()
+        if digit is not None:
+            print("Digit recognized as:", digit)
+        else:
+            print("No digit recognized.")
+
+        time.sleep(5)  # Keep the camera running briefly
 
         # Stop the camera server
         bot.stop_camera()
