@@ -485,6 +485,8 @@ if __name__ == '__main__':
     print("Camera server started. Visit http://<your_pi_ip>:5000/ in your browser.")
     time.sleep(2)  # Allow time for the camera to initialize
 
+    bot.calibrate_sensors()
+
     # Function to run line following in a separate thread
     def run_line_follow():
         bot.start_line_follow()
